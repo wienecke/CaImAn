@@ -97,7 +97,7 @@ def cnmf_patches(args_in):
         images = np.array(images[tuple(slices)], dtype=np.float32)
     else:
         images = images[slices]
-    images = images.squeeze() #WILSONLAB, CFRW, 240217: SQUEEZE ANY SINGLETON DIM (CAN REAPPEAR HERE)
+    images = images.squeeze() #WILSONLAB, CFRW, 240217: SQUEEZE ANY SINGLETON DIM (CAN REAPPEAR HERE) 
 
     logger.debug(name_log+'file loaded')
 
