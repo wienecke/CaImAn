@@ -2820,7 +2820,14 @@ def motion_correct_batch_rigid(fname, max_shifts, dview=None, splits=56, num_spl
 
     dims, T = caiman.base.movies.get_file_size(fname, var_name_hdf5=var_name_hdf5)
     Ts = np.arange(T)[subidx].shape[0]
-    step = Ts // 10 if is3D else Ts // 50
+    
+    use_different_number_frames_in_2d_and_3d_templates = 0 #WILSONLAB, CFRW, 240218, 0 TO MAKE 2D AND 3D HAVE SAME TEMPLATE NUM FRAMES (SET TO 1 FOR ORIGINAL)
+    if use_different_number_frames_in_2d_and_3d_templates:
+        step = Ts // 10 if is3D else Ts // 50 #this was the original line
+    else:
+        goal_frames_in_template = 50
+        step = Ts // goal_frames_in_template 
+    
     corrected_slicer = slice(subidx.start, subidx.stop, step + 1)
     m = cm.load(fname, var_name_hdf5=var_name_hdf5, subindices=corrected_slicer)
 
@@ -2848,8 +2855,14 @@ def motion_correct_batch_rigid(fname, max_shifts, dview=None, splits=56, num_spl
         else:
             if not m.flags['WRITEABLE']:
                 m = m.copy()
-            template = caiman.motion_correction.bin_median(
-                    m.motion_correct(max_shifts[1], max_shifts[0], template=None)[0])
+            register_template = 0 #WILSONLAB, CFRW, 240218, SWITCH OFF TEMPLATE REGISTER, IT CAN MAKE A BAD TEMPLATE FOR A NOISY MOVIE 
+            if register_template:
+                template = caiman.motion_correction.bin_median(
+                        m.motion_correct(max_shifts[1], max_shifts[0], template=None)[0])
+            else:
+                template = caiman.motion_correction.bin_median(m)
+
+
 
     new_templ = template
     if add_to_movie is None:
