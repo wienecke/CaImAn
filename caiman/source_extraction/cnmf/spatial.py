@@ -1116,6 +1116,9 @@ def creatememmap(Y, Cf, dview):
     if os.environ.get('SLURM_SUBMIT_DIR') is not None:
         tmpf = os.environ.get('SLURM_SUBMIT_DIR')
         print(f'cluster temporary folder: {tmpf}')
+        if '/var/www/ood/apps/sys/dashboard' in tmpf:
+            print("SWITCHING TEMP FOLDER TO USER HOME DIR")
+            tmpf = '/home/' + os.environ.get('USER')
         folder = tempfile.mkdtemp(dir=tmpf)
     else:
         folder = tempfile.mkdtemp()
