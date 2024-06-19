@@ -658,7 +658,7 @@ class Estimates(object):
                                       np.repeat(np.expand_dims(Y_res * gain_res, -1), 3, 3)), axis=2)
         else:
             mov = caiman.concatenate((imgs - (not include_bck) * B,
-                                      Y_rec + include_bck * B, Y_res * gain_res), axis=2)
+                                      Y_rec + include_bck * B, Y_res * gain_res, B), axis=2)
         if not display:
             return mov
 
