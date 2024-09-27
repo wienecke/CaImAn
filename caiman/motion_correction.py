@@ -51,6 +51,10 @@ import tifffile
 from typing import Optional
 from skimage.transform import resize as resize_sk
 from skimage.transform import warp as warp_sk
+from scipy.ndimage import median_filter as mdflt
+from scipy.ndimage import gaussian_filter as gflt
+
+
 
 import caiman as cm
 import caiman.base.movies
@@ -2418,6 +2422,11 @@ def tile_and_correct_3d(img:np.ndarray, template:np.ndarray, strides:tuple, over
     template = template + add_to_movie
 
     # compute rigid shifts
+    filter_image_before_registering_to_template = 1 #CFRW, WILSONLAB, 3D REGISTRATION IS IMPROVED BY LIGHTLY MEDIAN FILTERING XYZ SO IT BETTER MATCHES TEMPLATE (WHICH IS ALSO MEDIAN FILTERED, ALSO TRIED GAUSSIAN FILTERED SEE BELOW); CHANGING upsample_factor_fft DIDN'T HELP
+    if filter_image_before_registering_to_template:
+        img_orig = img.copy()
+        img = mdflt(img, size=2, axes=(0,1,2))
+        #img = gflt(img, sigma=(0.5,0.5), mode='reflect', axes=(0,1))
     rigid_shts, sfr_freq, diffphase = register_translation_3d(
         img, template, upsample_factor=upsample_factor_fft, max_shifts=max_shifts)
 
@@ -2427,12 +2436,16 @@ def tile_and_correct_3d(img:np.ndarray, template:np.ndarray, strides:tuple, over
             # NOTE: opencv does not support 3D operations - skimage is used instead
  #       else:
 
-        if gSig_filt is not None:
-            raise Exception(
-                'The use of FFT and filtering options have not been tested. Set opencv=True')
+        # if gSig_filt is not None:
+        #     raise Exception(
+        #         'The use of FFT and filtering options have not been tested. Set opencv=True')
 
-        new_img = apply_shifts_dft( # TODO: check
-            sfr_freq, (-rigid_shts[0], -rigid_shts[1], -rigid_shts[2]), diffphase, border_nan=border_nan)
+        # new_img = apply_shifts_dft( # TODO: check
+        #     sfr_freq, (-rigid_shts[0], -rigid_shts[1], -rigid_shts[2]), diffphase, border_nan=border_nan)
+        if gSig_filt is not None or filter_image_before_registering_to_template: #CFRW 
+            new_img = apply_shifts_dft(img_orig, (-rigid_shts[0], -rigid_shts[1], -rigid_shts[2]), diffphase, is_freq=False, border_nan=border_nan) #CFRW
+        else:
+            new_img = apply_shifts_dft(sfr_freq, (-rigid_shts[0], -rigid_shts[1], -rigid_shts[2]), diffphase, border_nan=border_nan)
 
         return new_img - add_to_movie, (-rigid_shts[0], -rigid_shts[1], -rigid_shts[2]), None, None
     else:
@@ -2849,16 +2862,19 @@ def motion_correct_batch_rigid(fname, max_shifts, dview=None, splits=56, num_spl
                 np.array([high_pass_filter_space(m_, gSig_filt) for m_ in m]))
         if is3D:     
             # TODO - motion_correct_3d needs to be implemented in movies.py
-            template = caiman.motion_correction.bin_median_3d(m) # motion_correct_3d has not been implemented yet - instead initialize to just median image
-#            template = caiman.motion_correction.bin_median_3d(
-#                    m.motion_correct_3d(max_shifts[2], max_shifts[1], max_shifts[0], template=None)[0])
+            restrict_template_to_initial_frames = 1 #CFRW WILSONLAB helps to take template from smaller subset of frames, in case drift, and also to better match frames being registered to this template in terms of snr
+            if restrict_template_to_initial_frames:
+                num_initial_frames = 50
+                template = caiman.motion_correction.bin_median_3d(m[:num_initial_frames,:,:,:])
+            else:
+                template = caiman.motion_correction.bin_median_3d(m) # motion_correct_3d has not been implemented yet - instead initialize to just median image
+            #  template = caiman.motion_correction.bin_median_3d(m.motion_correct_3d(max_shifts[2], max_shifts[1], max_shifts[0], template=None)[0])
         else:
             if not m.flags['WRITEABLE']:
                 m = m.copy()
             register_template = 0 #WILSONLAB, CFRW, 240218, SWITCH OFF TEMPLATE REGISTER, IT CAN MAKE A BAD TEMPLATE FOR A NOISY MOVIE 
             if register_template:
-                template = caiman.motion_correction.bin_median(
-                        m.motion_correct(max_shifts[1], max_shifts[0], template=None)[0])
+                template = caiman.motion_correction.bin_median(m.motion_correct(max_shifts[1], max_shifts[0], template=None, method='opencv')[0]) #CFRW made opencv default but i don't use register_template anyway
             else:
                 template = caiman.motion_correction.bin_median(m)
 
