@@ -550,7 +550,7 @@ def apply_shift_iteration(img, shift, border_nan:bool=False, border_type=cv2.BOR
     M = np.float32([[1, 0, sh_y_n], [0, 1, sh_x_n]])
     min_, max_ = np.nanmin(img), np.nanmax(img)
     img = np.clip(cv2.warpAffine(img, M, (h_i, w_i),
-                                 flags=cv2.INTER_CUBIC, borderMode=border_type), min_, max_)
+                                 flags=cv2.INTER_CUBIC, borderMode=border_type), min_, max_) #CFRW this is where interpolation can introduce smoothing outside range of data, since default is INTER_CUBIC; CFRW added clipping afterwards to remove that; one could instead use nearest interp but haven't tested it  
     if border_nan is not False:
         max_w, max_h, min_w, min_h = 0, 0, 0, 0
         max_h, max_w = np.ceil(np.maximum(
@@ -2162,20 +2162,28 @@ def tile_and_correct(img, template, strides, overlaps, max_shifts, newoverlaps=N
 
     """
     logging.debug("Starting tile and correct")
+
+    median_filter_image_to_compute_shifts = 1 #CFRW, WILSONLAB, REGISTRATION IS IMPROVED BY LIGHTLY MEDIAN FILTERING XY SO IT BETTER MATCHES TEMPLATE (WHICH IS ALSO MEDIAN FILTERED BY CAIMAN DEFAULT); ALSO TRIED GAUSSIAN FILTER, WORKED SIMILARLY, SEE BELOW); THE FILTERING DOES NOT APPEAR IN THE OUTPUT BECAUSE SHIFTS ARE COMPUTED WITH FILTERED DATA BUT APPLIED TO UNFILTERED DATA
+
     img = img.astype(np.float64).copy()
     template = template.astype(np.float64).copy()
 
     if gSig_filt is not None:
-
         img_orig = img.copy()
+        img_orig = img_orig + add_to_movie
         img = high_pass_filter_space(img_orig, gSig_filt)
+
+    if median_filter_image_to_compute_shifts: 
+        img_orig = img.copy()
+        img_orig = img_orig + add_to_movie
+        img = mdflt(img, size=2, axes=(0,1))
+        #img = gflt(img, sigma=(0.5,0.5), mode='reflect', axes=(0,1))
 
     img = img + add_to_movie
     template = template + add_to_movie
 
     # compute rigid shifts
-    rigid_shts, sfr_freq, diffphase = register_translation(
-        img, template, upsample_factor=upsample_factor_fft, max_shifts=max_shifts, use_cuda=use_cuda)
+    rigid_shts, sfr_freq, diffphase = register_translation(img, template, upsample_factor=upsample_factor_fft, max_shifts=max_shifts, use_cuda=use_cuda)
 
     if max_deviation_rigid == 0:
 
@@ -2183,21 +2191,26 @@ def tile_and_correct(img, template, strides, overlaps, max_shifts, newoverlaps=N
             if gSig_filt is not None:
                 img = img_orig
 
-            new_img = apply_shift_iteration(
-                img, (-rigid_shts[0], -rigid_shts[1]), border_nan=border_nan)
+            new_img = apply_shift_iteration(img, (-rigid_shts[0], -rigid_shts[1]), border_nan=border_nan)
 
         else:
 
-            if gSig_filt is not None:
-                raise Exception(
-                    'The use of FFT and filtering options have not been tested. Set opencv=True')
+            # if gSig_filt is not None:
+            #     raise Exception('The use of FFT and filtering options have not been tested. Set opencv=True')
 
-            new_img = apply_shifts_dft(
-                sfr_freq, (-rigid_shts[0], -rigid_shts[1]), diffphase, border_nan=border_nan)
+            if gSig_filt is not None or median_filter_image_to_compute_shifts: #CFRW 
+                if gSig_filt is not None:
+                    print("caiman originally errors when using gSig_filt with shifts_opencv set to false; carl removed the error for testing")
+                new_img = apply_shifts_dft(img_orig, (-rigid_shts[0], -rigid_shts[1]), diffphase, is_freq=False, border_nan=border_nan) #CFRW
+            else:
+                new_img = apply_shifts_dft(sfr_freq, (-rigid_shts[0], -rigid_shts[1]), diffphase, border_nan=border_nan)
 
         return new_img - add_to_movie, (-rigid_shts[0], -rigid_shts[1]), None, None
     else:
         # extract patches
+
+        if median_filter_image_to_compute_shifts:
+            raise Exception("warning median_filter_image_to_compute_shifts is true and so is pw_rigid; carl created the option median_filter_image_to_compute_shifts for rigid registration; the code needs to be tested for nonrigid when median_filter_image_to_compute_shifts is true")
         logging.info("Extracting patches")
         templates = [
             it[-1] for it in sliding_window(template, overlaps=overlaps, strides=strides)]
@@ -2410,39 +2423,41 @@ def tile_and_correct_3d(img:np.ndarray, template:np.ndarray, strides:tuple, over
 
     """
 
+    median_filter_image_to_compute_shifts = 1 #CFRW, WILSONLAB, REGISTRATION IS IMPROVED BY LIGHTLY MEDIAN FILTERING XYZ SO IT BETTER MATCHES TEMPLATE (WHICH IS ALSO MEDIAN FILTERED BY CAIMAN DEFAULT); ALSO TRIED GAUSSIAN FILTER, WORKED SIMILARLY, SEE BELOW); THE FILTERING DOES NOT APPEAR IN THE OUTPUT BECAUSE SHIFTS ARE COMPUTED WITH FILTERED DATA BUT APPLIED TO UNFILTERED DATA
+
     img = img.astype(np.float64).copy()
     template = template.astype(np.float64).copy()
 
     if gSig_filt is not None:
-
         img_orig = img.copy()
+        img_orig = img_orig + add_to_movie
         img = high_pass_filter_space(img_orig, gSig_filt)
+
+    if median_filter_image_to_compute_shifts:
+        img_orig = img.copy()
+        img_orig = img_orig + add_to_movie
+        img = mdflt(img, size=2, axes=(0,1,2))
+        #img = gflt(img, sigma=(0.5,0.5,0.5), mode='reflect', axes=(0,1,2))
 
     img = img + add_to_movie
     template = template + add_to_movie
 
     # compute rigid shifts
-    filter_image_before_registering_to_template = 1 #CFRW, WILSONLAB, 3D REGISTRATION IS IMPROVED BY LIGHTLY MEDIAN FILTERING XYZ SO IT BETTER MATCHES TEMPLATE (WHICH IS ALSO MEDIAN FILTERED, ALSO TRIED GAUSSIAN FILTERED SEE BELOW); CHANGING upsample_factor_fft DIDN'T HELP
-    if filter_image_before_registering_to_template:
-        img_orig = img.copy()
-        img = mdflt(img, size=2, axes=(0,1,2))
-        #img = gflt(img, sigma=(0.5,0.5), mode='reflect', axes=(0,1))
-    rigid_shts, sfr_freq, diffphase = register_translation_3d(
-        img, template, upsample_factor=upsample_factor_fft, max_shifts=max_shifts)
+    rigid_shts, sfr_freq, diffphase = register_translation_3d(img, template, upsample_factor=upsample_factor_fft, max_shifts=max_shifts)
 
     if max_deviation_rigid == 0: # if rigid shifts only
 
-#        if shifts_opencv:
-            # NOTE: opencv does not support 3D operations - skimage is used instead
- #       else:
+        #if shifts_opencv:
+        #    NOTE: opencv does not support 3D operations - skimage is used instead
+        #else:
 
-        # if gSig_filt is not None:
-        #     raise Exception(
-        #         'The use of FFT and filtering options have not been tested. Set opencv=True')
+        #if gSig_filt is not None:
+        #    raise Exception(
+        #        'The use of FFT and filtering options have not been tested. Set opencv=True')
 
-        # new_img = apply_shifts_dft( # TODO: check
-        #     sfr_freq, (-rigid_shts[0], -rigid_shts[1], -rigid_shts[2]), diffphase, border_nan=border_nan)
-        if gSig_filt is not None or filter_image_before_registering_to_template: #CFRW 
+        if gSig_filt is not None or median_filter_image_to_compute_shifts: #CFRW 
+            if gSig_filt is not None:
+                print("caiman originally errors when using gSig_filt with shifts_opencv set to false; carl removed the error for testing")
             new_img = apply_shifts_dft(img_orig, (-rigid_shts[0], -rigid_shts[1], -rigid_shts[2]), diffphase, is_freq=False, border_nan=border_nan) #CFRW
         else:
             new_img = apply_shifts_dft(sfr_freq, (-rigid_shts[0], -rigid_shts[1], -rigid_shts[2]), diffphase, border_nan=border_nan)
@@ -2450,6 +2465,8 @@ def tile_and_correct_3d(img:np.ndarray, template:np.ndarray, strides:tuple, over
         return new_img - add_to_movie, (-rigid_shts[0], -rigid_shts[1], -rigid_shts[2]), None, None
     else:
         # extract patches
+        if median_filter_image_to_compute_shifts:
+            raise Exception("warning median_filter_image_to_compute_shifts is true and so is pw_rigid; carl created the option median_filter_image_to_compute_shifts for rigid registration; the code needs to be tested for nonrigid when median_filter_image_to_compute_shifts is true")
         templates = [
             it[-1] for it in sliding_window_3d(template, overlaps=overlaps, strides=strides)]
         xyz_grid = [(it[0], it[1], it[2]) for it in sliding_window_3d(
@@ -2834,14 +2851,19 @@ def motion_correct_batch_rigid(fname, max_shifts, dview=None, splits=56, num_spl
     dims, T = caiman.base.movies.get_file_size(fname, var_name_hdf5=var_name_hdf5)
     Ts = np.arange(T)[subidx].shape[0]
     
-    use_different_number_frames_in_2d_and_3d_templates = 0 #WILSONLAB, CFRW, 240218, 0 TO MAKE 2D AND 3D HAVE SAME TEMPLATE NUM FRAMES (SET TO 1 FOR ORIGINAL)
-    if use_different_number_frames_in_2d_and_3d_templates:
-        step = Ts // 10 if is3D else Ts // 50 #this was the original line
-    else:
-        goal_frames_in_template = 50
-        step = Ts // goal_frames_in_template 
+    register_2d_template = 0 #WILSONLAB, CFRW, 240218, caiman default is register_2d_template=1; SWITCH OFF TEMPLATE REGISTER for 2d, IT CAN MAKE A BAD TEMPLATE FOR A NOISY MOVIE; there is no option to register 3d template in caiman yet
+    use_caiman_default_template_frames = 0 #WILSONLAB, CFRW, 240218, caiman defualt is use_caiman_default_template_frames=1; 1 to use caiman's original, which is 10 equidistant frames in 2d template, 50 equidistant in 3d template; make 0 to make template from first num_template_frames frames
+    num_template_frames_if_not_using_caiman_default_template_frames = 50 #if use_caiman_default_template_frames is false, how many initial frames of stack to use to make template
+    template_start_frame_if_not_using_caiman_default_template_frames = 0 #first frame of template if use_caiman_default_template_frames is false
     
-    corrected_slicer = slice(subidx.start, subidx.stop, step + 1)
+    if use_caiman_default_template_frames:
+        step = Ts // 10 if is3D else Ts // 50 #this is caiman's default 
+        corrected_slicer = slice(subidx.start, subidx.stop, step + 1)
+    else:
+        if subidx.start is not None or subidx.stop is not None:
+            raise Exception("you are using use_caiman_default_template_frames=0 but have also passed t indices; do one or the other")
+        corrected_slicer = slice(0+template_start_frame_if_not_using_caiman_default_template_frames, num_template_frames_if_not_using_caiman_default_template_frames+template_start_frame_if_not_using_caiman_default_template_frames, 1) #first num_template_frames_if_not_using_caiman_default_template_frames frames
+        
     m = cm.load(fname, var_name_hdf5=var_name_hdf5, subindices=corrected_slicer)
 
     if len(m.shape) < 3:
@@ -2862,18 +2884,12 @@ def motion_correct_batch_rigid(fname, max_shifts, dview=None, splits=56, num_spl
                 np.array([high_pass_filter_space(m_, gSig_filt) for m_ in m]))
         if is3D:     
             # TODO - motion_correct_3d needs to be implemented in movies.py
-            restrict_template_to_initial_frames = 1 #CFRW WILSONLAB helps to take template from smaller subset of frames, in case drift, and also to better match frames being registered to this template in terms of snr
-            if restrict_template_to_initial_frames:
-                num_initial_frames = 50
-                template = caiman.motion_correction.bin_median_3d(m[:num_initial_frames,:,:,:])
-            else:
-                template = caiman.motion_correction.bin_median_3d(m) # motion_correct_3d has not been implemented yet - instead initialize to just median image
+            template = caiman.motion_correction.bin_median_3d(m) # motion_correct_3d has not been implemented yet - instead initialize to just median image
             #  template = caiman.motion_correction.bin_median_3d(m.motion_correct_3d(max_shifts[2], max_shifts[1], max_shifts[0], template=None)[0])
         else:
             if not m.flags['WRITEABLE']:
                 m = m.copy()
-            register_template = 0 #WILSONLAB, CFRW, 240218, SWITCH OFF TEMPLATE REGISTER, IT CAN MAKE A BAD TEMPLATE FOR A NOISY MOVIE 
-            if register_template:
+            if register_2d_template:
                 template = caiman.motion_correction.bin_median(m.motion_correct(max_shifts[1], max_shifts[0], template=None, method='opencv')[0]) #CFRW made opencv default but i don't use register_template anyway
             else:
                 template = caiman.motion_correction.bin_median(m)
@@ -3112,6 +3128,7 @@ def tile_and_correct_wrapper(params):
     if not imgs[0].shape == template.shape:
         template = template[indices]
     for count, img in enumerate(imgs):
+
         if count % 10 == 0:
             logging.debug(count)
         if is3D:
@@ -3135,7 +3152,15 @@ def tile_and_correct_wrapper(params):
                                                                        shifts_opencv=shifts_opencv, gSig_filt=gSig_filt,
                                                                        use_cuda=use_cuda, border_nan=border_nan)
             shift_info.append([total_shift, start_step, xy_grid])
-    # 
+        
+        
+        #CFRW WILSONLAB 20241023 CLIP VALUES OUTSIDE ORIGINAL DATA RANGE; INTERPOLATION WHEN APPLYING SHIFTS CAN INTRODUCE THESE VALUES; ORIGINAL MATLAB NORMCORRE DID THIS BUT PYTHON CAIMAN DOES NOT
+        #clip values outside original range
+        immn = np.min(img)
+        immx = np.max(img)
+        mc[count][mc[count]<immn] = immn
+        mc[count][mc[count]>immx] = immx
+     
     if out_fname is not None:
         outv = np.memmap(out_fname, mode='r+', dtype=np.float32,
                          shape=prepare_shape(shape_mov), order='F')
