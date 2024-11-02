@@ -2854,7 +2854,7 @@ def motion_correct_batch_rigid(fname, max_shifts, dview=None, splits=56, num_spl
     register_2d_template = 0 #WILSONLAB, CFRW, 240218, caiman default is register_2d_template=1; SWITCH OFF TEMPLATE REGISTER for 2d, IT CAN MAKE A BAD TEMPLATE FOR A NOISY MOVIE; there is no option to register 3d template in caiman yet
     use_caiman_default_template_frames = 0 #WILSONLAB, CFRW, 240218, caiman defualt is use_caiman_default_template_frames=1; 1 to use caiman's original, which is 10 equidistant frames in 2d template, 50 equidistant in 3d template; make 0 to make template from first num_template_frames frames
     num_template_frames_if_not_using_caiman_default_template_frames = 50 #if use_caiman_default_template_frames is false, how many initial frames of stack to use to make template
-    template_start_frame_if_not_using_caiman_default_template_frames = 0 #first frame of template if use_caiman_default_template_frames is false
+    template_start_frame_if_not_using_caiman_default_template_frames = int(np.floor(Ts/2)) # was 0, switched to middle frame #first frame of template if use_caiman_default_template_frames is false
     
     if use_caiman_default_template_frames:
         step = Ts // 10 if is3D else Ts // 50 #this is caiman's default 
